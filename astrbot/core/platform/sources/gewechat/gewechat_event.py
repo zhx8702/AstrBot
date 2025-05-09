@@ -4,9 +4,11 @@ import wave
 import uuid
 import traceback
 import os
+import base64
+from PIL import Image as PILImage
 
 from typing import AsyncGenerator
-from astrbot.core.utils.io import save_temp_img, download_file
+from astrbot.core.utils.io import download_file
 from astrbot.core.utils.tencent_record_helper import wav_to_tencent_silk
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
@@ -34,6 +36,26 @@ def get_wav_duration(file_path):
         else:
             duration = n_frames / float(framerate)
         return duration
+
+
+def compress_image(source_path: str, max_size: int = 1280, quality: int = 85) -> str:
+    """
+    压缩图片尺寸 & 质量，保持宽高不超过 max_size，并覆盖原图
+    """
+    img = PILImage.open(source_path)
+    img = img.convert("RGB")  # 确保兼容格式
+    width, height = img.size
+
+    # 尺寸缩放（保持比例）
+    if max(width, height) > max_size:
+        scale = max_size / max(width, height)
+        new_size = (int(width * scale), int(height * scale))
+        img = img.resize(new_size, PILImage.ANTIALIAS)
+
+    # 覆盖保存为压缩后的 JPEG（或 PNG）
+    output_path = source_path.rsplit(".", 1)[0] + "_compressed.jpg"
+    img.save(output_path, format="JPEG", quality=quality)
+    return output_path
 
 
 class GewechatPlatformEvent(AstrMessageEvent):
@@ -83,11 +105,12 @@ class GewechatPlatformEvent(AstrMessageEvent):
 
             elif isinstance(comp, Image):
                 img_path = await comp.convert_to_file_path()
-                # 为了安全，向 AstrBot 回调服务注册可被 gewechat 访问的文件，并获得文件 token
-                token = await client._register_file(img_path)
-                img_url = f"{client.file_server_url}/{token}"
-                logger.debug(f"gewe callback img url: {img_url}")
-                await client.post_image(to_wxid, img_url)
+                img_path = compress_image(img_path)
+                with open(img_path, "rb") as f:
+                    image = base64.b64encode(f.read()).decode()
+
+                logger.debug(f"gewe callback img url: {img_path}")
+                await client.post_image(to_wxid, image)
             elif isinstance(comp, Video):
                 if comp.cover != "":
                     await client.forward_video(to_wxid, comp.cover)

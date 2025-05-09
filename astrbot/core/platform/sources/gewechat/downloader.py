@@ -1,4 +1,5 @@
 from astrbot import logger
+import xml.etree.ElementTree as ET
 import aiohttp
 import json
 
@@ -20,25 +21,32 @@ class GeweDownloader:
         payload = {"appId": appid, "xml": xml, "msgId": msg_id}
         return await self._post_json(self.base_url, "/message/downloadVoice", payload)
 
-    async def download_image(self, appid: str, xml: str) -> str:
+    async def download_image(self, wxid: str, content: str) -> str:
         """返回一个可下载的 URL"""
-        choices = [2, 3]  #  2:常规图片 3:缩略图
+        # 解析图片消息
+        aeskey, cdnmidimgurl = None, None
+        try:
+            root = ET.fromstring(content)
+            img_element = root.find("img")
+            if img_element is not None:
+                aeskey = img_element.get("aeskey")
+                cdnmidimgurl = img_element.get("cdnmidimgurl")
+        except Exception as e:
+            logger.error("解析图片消息失败: {}", e)
+            return
 
-        for choice in choices:
-            try:
-                payload = {"appId": appid, "xml": xml, "type": choice}
-                data = await self._post_json(
-                    self.base_url, "/message/downloadImage", payload
-                )
-                json_blob = json.loads(data)
-                if "fileUrl" in json_blob["data"]:
-                    return self.download_base_url + json_blob["data"]["fileUrl"]
+        async with aiohttp.ClientSession() as session:
+            json_param = {"Wxid": wxid, "AesKey": aeskey, "Cdnmidimgurl": cdnmidimgurl}
+            response = await session.post(
+                f"{self.base_url}/CdnDownloadImg", json=json_param
+            )
+            json_resp = await response.json()
 
-            except BaseException as e:
-                logger.error(f"gewe download image: {e}")
-                continue
-
-        raise Exception("无法下载图片")
+            if json_resp.get("Success"):
+                return json_resp.get("Data")
+            else:
+                print(json_resp)
+                raise Exception(f"下载图片失败: {json_resp.get('Message')}")
 
     async def download_emoji_md5(self, app_id, emoji_md5):
         """下载emoji"""
